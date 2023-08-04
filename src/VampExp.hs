@@ -73,10 +73,10 @@ patternAccessors v (VarPat var) = [(var, CVar var (Just v))]
 -- Fold over the pattern accessors, turning, for example,
 -- 'let (x, y, z) = e in ?' into '\u (\x (\y (\z v) u.3) u.2) u.3'
 translatePat :: Pat -> CtxM v (CoreP v) -> CtxM v (CoreP v)
-translatePat pat expr ctx = CLam $ \v -> foldr mkBnd expr (reverse $ patternAccessors v pat) ctx
+translatePat pat expr ctx = CLam Nothing Nothing $ \v -> foldr mkBnd expr (reverse $ patternAccessors v pat) ctx
     where
     -- Take a variable name and binds a real variable to it
-    bndArg var expr0 ctx0 = CLam $ \v -> expr0 (Map.insert (varid var) v ctx0)
+    bndArg var expr0 ctx0 = CLam (Just $ varid var) Nothing $ \v -> expr0 (Map.insert (varid var) v ctx0)
     -- Takes a let v := a in e and turns it into '(\v. e) a'
     mkBnd (var, acsr) expr0 = flip CApp acsr <$> bndArg var expr0
 
