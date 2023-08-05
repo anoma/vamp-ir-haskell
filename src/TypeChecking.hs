@@ -113,7 +113,7 @@ infer expr = case expr of
         _ <- lift $ argTy =:= UTerm (ListF resTy)
         return argTy
     CFresh _ -> return $ UTerm FieldElemF -- Note: Should this be generalized?
-    CLam f -> do
+    CLam _ _ f -> do
         argTy <- fresh
         resTy <- infer (f argTy)
         return $ UTerm $ FunF argTy resTy

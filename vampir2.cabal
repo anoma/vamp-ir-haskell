@@ -43,6 +43,7 @@ library
   build-depends:
       base >=4.7 && <5
     , containers >=0.6.7
+    , hegg >=0.4.0.0
     , hspec >=2.10
     , megaparsec >=9.3.0
     , mtl >=2.2.2
@@ -60,6 +61,7 @@ executable vampir2-exe
   build-depends:
       base >=4.7 && <5
     , containers >=0.6.7
+    , hegg >=0.4.0.0
     , hspec >=2.10
     , megaparsec >=9.3.0
     , mtl >=2.2.2
@@ -79,6 +81,7 @@ test-suite vampir2-test
   build-depends:
       base >=4.7 && <5
     , containers >=0.6.7
+    , hegg >=0.4.0.0
     , hspec >=2.10
     , megaparsec >=9.3.0
     , mtl >=2.2.2

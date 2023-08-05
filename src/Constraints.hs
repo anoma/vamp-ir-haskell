@@ -1,6 +1,6 @@
 module Constraints
     ( ArithExp(..), Clause(..), Constraints,
-      Variable(..), VariableId, Sig, varid, FieldOp(..), 
+      Variable(..), VariableId, Sig, varid, newVar, FieldOp(..), 
     ) where
 
 import Control.Monad.State
@@ -21,7 +21,7 @@ data FieldOp
 
 data ArithExp
     = AVar Variable
-    | AFresh Sig
+    | AFresh [ArithExp]
     | AConst Integer
     | ANeg ArithExp
     | AOp FieldOp ArithExp ArithExp
@@ -36,7 +36,7 @@ type FlatM x = StateT ((S.Set Variable, M.Map VariableId Sig), VariableId) (Eith
 -- along with the variable that can be used as the head of the expression
 -- state acumulates free variables, fresh dependencies, and used names
 -- First arg is a possible variable that can be used to prevent new variables; handles clause equations
-flatten :: Maybe (Either Integer SignedVar) -> ArithExp -> FlatM (Either Integer SignedVar, [ThreeAddressCode])
+flatten :: Maybe (Either Integer SignedVar) -> ArithExp -> FlatM (Either Integer SignedVar, Circuit)
 flatten hyv (AVar var) = do
     modify $ first $ first (S.insert var)
     let def x = return (Right $ Pos var, x)
@@ -47,7 +47,7 @@ flatten hyv (AVar var) = do
 flatten hyv (AFresh sig) = do
     (_, newid) <- get
     let newvar = newVar newid
-    modify $ \((free, fresh), ids) -> ((free, M.insert newid sig fresh), ids + 1)
+    -- modify $ \((free, fresh), ids) -> ((free, M.insert newid sig fresh), ids + 1)
     let def x = return (Right $ Pos $ newvar, x)
     case hyv of
         Nothing -> def []
@@ -337,11 +337,11 @@ flatten (Just (Right (Neg newvar2))) (AOp op e1 e2) = do
 -- as the variable in the first expression can be shared with the second. This means that
 -- equations without operations on one side will be smaller if the non-op is on the left side.
 -- For example, x * (x - 1) = 0 will be bigger than 0 = x * (x - 1)
-flattenEq :: Clause -> FlatM [ThreeAddressCode]
+flattenEq :: Clause -> FlatM Circuit
 flattenEq (ClEq e1 e2) = do
     (hd1, bdy1) <- flatten Nothing e1
     (_, bdy2) <- flatten (Just hd1) e2
     return $ bdy1 ++ bdy2
 
-flattenConstraints :: Constraints -> FlatM [ThreeAddressCode]
+flattenConstraints :: Constraints -> FlatM Circuit
 flattenConstraints = foldr ((<*>) . ((++) <$>) . flattenEq) (return [])

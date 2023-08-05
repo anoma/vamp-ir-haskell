@@ -42,7 +42,7 @@ data CallNumTree
     | CaBranch CallNumTree CallNumTree
     | CaLam Int CallNumTree
 
--- Number of times a variable id appears
+-- Number of times a variable id appears under its binder
 callNumbers :: Core -> CallNumTree
 callNumbers = snd . go . unCore where
     go :: CoreP () -> (M.Map VariableId Int, CallNumTree)
@@ -124,7 +124,7 @@ callDecorate exp = Core $ go (unCore exp) (callNumbers exp) where
 
 newtype Normalized = Normalized {unNormalized :: CoreP Normalized}
 
-data RoughType = RConstraint | RElement | RArithExp | ROther deriving (Eq)
+data RoughType = RConstraint | RElement | RArithExp | RFresh | ROther deriving (Eq)
 roughType :: CoreP v -> RoughType
 roughType expr = case expr of
     CVar _ _-> RElement
@@ -138,7 +138,7 @@ roughType expr = case expr of
     CNil -> ROther
     CHd _ -> ROther
     CTl _ -> ROther
-    CFresh _ -> RArithExp
+    CFresh _ -> RFresh
     CLam {} -> ROther
     CApp _ _ -> ROther
     COp {} -> RArithExp
@@ -201,7 +201,8 @@ normalize expr l = case expr of
             case calls of
                 Nothing -> normalize (f (Normalized x)) xs
                 Just i -> 
-                    if i <= 1 || roughType x /= RArithExp
+                    let rt = roughType x in
+                    if (i <= 1 || rt /= RArithExp) && rt /= RFresh
                     then normalize (f (Normalized x)) xs
                     else do
                         (newid, _) <- get

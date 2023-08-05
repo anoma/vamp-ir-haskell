@@ -26,6 +26,7 @@ dependencies:
 - parser-combinators >= 1.3.0
 - hspec >= 2.10
 - unification-fd >= 0.11.2
+- hegg >= 0.4.0.0
 - mtl >= 2.2.2
 
 ghc-options:
