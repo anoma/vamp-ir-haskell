@@ -27,8 +27,11 @@ initialState = ParserState 0 Map.empty
 
 type Parser = ParsecT Void String (St.State ParserState)
 
-runInitParser :: Parser a -> String -> (Either (ParseErrorBundle String Void) a, ParserState)
-runInitParser p input = St.runState (runParserT p "" input) initialState
+evalInitParser :: Parser a -> String -> (Either (ParseErrorBundle String Void) a, ParserState)
+evalInitParser p input = St.runState (runParserT p "" input) initialState
+
+runInitParser :: Parser a -> String -> Either (ParseErrorBundle String Void) a
+runInitParser p input = fst $ evalInitParser p input
 
 spaceComments :: Parser ()
 spaceComments = L.space space1 (L.skipLineComment "//" <|> L.skipBlockComment "/*" "*/") empty

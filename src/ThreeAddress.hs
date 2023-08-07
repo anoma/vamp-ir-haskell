@@ -1,5 +1,5 @@
 module ThreeAddress
-    ( Variable(..), VariableId, newVar, ThreeAddressCode(..), SignedVar(..), Sig, Circuit
+    ( Variable(..), VariableId, newVar, varId, ThreeAddressCode(..), SignedVar(..), Sig, Circuit, inferAssignment
     ) where
 
 import qualified Data.Set as S
@@ -11,8 +11,8 @@ data Variable = Variable (Maybe String) VariableId
 newVar :: VariableId -> Variable
 newVar = Variable Nothing
 
-getVarId :: Variable -> VariableId
-getVarId (Variable _ vid) = vid
+varId :: Variable -> VariableId
+varId (Variable _ vid) = vid
 
 data Sig = Sig Int Int
 
@@ -45,27 +45,27 @@ type Circuit = [ThreeAddressCode]
 -- Extract variable ids from an instruction
 variablesInTAC :: ThreeAddressCode -> [VariableId]
 variablesInTAC tac = case tac of
-    EVC var _ -> [getVarId var]
-    EVV signedVar var -> getVarId var
+    EVC var _ -> [varId var]
+    EVV signedVar var -> varId var
         : (case signedVar of
-            Pos v -> [getVarId v]
-            Neg v -> [getVarId v])
-    AddVCV var _ var2 -> [getVarId var, getVarId var2]
-    AddCVV _ var var2 -> [getVarId var, getVarId var2]
-    AddVVV signedVar var var2 -> [getVarId var, getVarId var2] ++ (case signedVar of
-        Pos v -> [getVarId v]
-        Neg v -> [getVarId v])
-    MulCVV _ var var2 -> [getVarId var, getVarId var2]
-    MulVCV var _ var2 -> [getVarId var, getVarId var2]
-    MulVVV signedVar var var2 -> [getVarId var, getVarId var2] ++ (case signedVar of
-        Pos v -> [getVarId v]
-        Neg v -> [getVarId v])
-    DivCCV _ _ var -> [getVarId var]
-    DivCVV _ var var2 -> [getVarId var, getVarId var2]
-    DivVCV var _ var2 -> [getVarId var, getVarId var2]
-    DivVVV signedVar var var2 -> [getVarId var, getVarId var2] ++ (case signedVar of
-        Pos v -> [getVarId v]
-        Neg v -> [getVarId v])
+            Pos v -> [varId v]
+            Neg v -> [varId v])
+    AddVCV var _ var2 -> [varId var, varId var2]
+    AddCVV _ var var2 -> [varId var, varId var2]
+    AddVVV signedVar var var2 -> [varId var, varId var2] ++ (case signedVar of
+        Pos v -> [varId v]
+        Neg v -> [varId v])
+    MulCVV _ var var2 -> [varId var, varId var2]
+    MulVCV var _ var2 -> [varId var, varId var2]
+    MulVVV signedVar var var2 -> [varId var, varId var2] ++ (case signedVar of
+        Pos v -> [varId v]
+        Neg v -> [varId v])
+    DivCCV _ _ var -> [varId var]
+    DivCVV _ var var2 -> [varId var, varId var2]
+    DivVCV var _ var2 -> [varId var, varId var2]
+    DivVVV signedVar var var2 -> [varId var, varId var2] ++ (case signedVar of
+        Pos v -> [varId v]
+        Neg v -> [varId v])
 
 -- Build map from ids to indices of clauses referencing those ids
 constructMap :: Circuit -> M.Map VariableId (S.Set Int)
@@ -76,7 +76,8 @@ constructMap circuit =
     updateMap acc (idx, tac) = 
         foldl (\m varId -> M.insertWith S.union varId (S.singleton idx) m) acc (variablesInTAC tac)
 
--- Try to infer an assignment from an instruction
+-- Try to infer an assignment from a 3ac clause
+-- Note: This should only ever produce an assignment if that variable isn't already assigned
 inferAssignment :: M.Map VariableId Integer -> ThreeAddressCode -> M.Map VariableId Integer
 inferAssignment assignments tac = case tac of
     EVC (Variable _ x) value ->
@@ -113,8 +114,8 @@ inferAssignment assignments tac = case tac of
         let xValM = M.lookup x assignments
             yValM = M.lookup y assignments
         in case (xValM, yValM) of
-            (Just xVal, Nothing) -> M.singleton y (i + xVal)
-            (Nothing, Just yVal) -> M.singleton x (yVal - i)
+            (Just xVal, Nothing) -> M.singleton y (i - xVal)
+            (Nothing, Just yVal) -> M.singleton x (i - yVal)
             _ -> M.empty
 
     AddVVV signedVar (Variable _ y) (Variable _ z) -> 
@@ -158,8 +159,7 @@ inferAssignment assignments tac = case tac of
             yValM = M.lookup y assignments
         in case (xValM, yValM) of
             (Just xVal, Nothing)
-                | xVal == 0 && i /= 0 -> M.singleton y 0
-                | xVal /= 0 && i /= 0 -> M.singleton y (xVal `div` i)
+                | i /= 0 -> M.singleton y (xVal `div` i)
                 | otherwise -> M.empty
             (Nothing, Just yVal) -> M.singleton x (i * yVal)
             (Nothing, Nothing) 
@@ -175,15 +175,15 @@ inferAssignment assignments tac = case tac of
             yValM = M.lookup y assignments
             zValM = M.lookup z assignments
         in case (xValM, yValM, zValM) of
-            (Just xVal, Just yVal, Nothing) -> 
-                if yVal == 0 then M.empty
-                else
+            (Just xVal, Just yVal, Nothing)
+                | yVal == 0 ->  M.empty
+                | otherwise ->
                     case signedVar of
                         Pos _ -> M.singleton z (xVal `div` yVal)
                         Neg _ -> M.singleton z (-xVal `div` yVal)
-            (Just xVal, Nothing, Just zVal) -> 
-                if zVal == 0 then M.empty
-                else
+            (Just xVal, Nothing, Just zVal)
+                | zVal == 0 -> M.empty
+                | otherwise ->
                     case signedVar of
                         Pos _ -> M.singleton y (xVal `div` zVal)
                         Neg _ -> M.singleton y (-xVal `div` zVal)
@@ -200,8 +200,8 @@ inferAssignment assignments tac = case tac of
         in case yValM of
             Just _ -> M.empty
             Nothing -> 
-                if i == 0 then M.empty  -- Cannot infer y when i is zero
-                else M.singleton y (j `div` i)  -- Inferring y = j / i
+                if i == 0 then M.empty  -- Cannot infer y
+                else M.singleton y (j `div` i)
 
     DivCVV i (Variable _ x) (Variable _ y) ->
         let xValM = M.lookup x assignments
@@ -213,19 +213,19 @@ inferAssignment assignments tac = case tac of
             (Nothing, Just yVal) ->
                 if yVal == 0 then M.empty -- Division by zero is undefined
                 else M.singleton x (i * yVal)
-            _ -> M.empty -- Any other case, no new inference
+            _ -> M.empty
 
     DivVCV (Variable _ x) i (Variable _ y) -> 
         let xValM = M.lookup x assignments
             yValM = M.lookup y assignments
         in case (xValM, yValM) of
             (Just xVal, Nothing) -> 
-                if xVal == 0 || i == 0 then M.empty  -- Cannot infer y
+                if xVal == 0 || i == 0 then M.empty -- Cannot infer y
                 else M.singleton y (i `div` xVal)
             (Nothing, Just yVal) -> 
-                if yVal == 0 then M.empty  -- Division by zero is undefined
+                if yVal == 0 then M.empty -- Division by zero
                 else M.singleton x (i `div` yVal)
-            _ -> M.empty -- Any other case, no new inference
+            _ -> M.empty
 
     DivVVV signedVar (Variable _ y) (Variable _ z) -> 
         let x = case signedVar of
@@ -236,26 +236,23 @@ inferAssignment assignments tac = case tac of
             zValM = M.lookup z assignments
         in case (xValM, yValM, zValM) of
             (Just _, Just _, Just _) -> M.empty
-            (Just xVal, Just yVal, Nothing) -> 
-                -- x and y known; infer z
-                if xVal == 0 || yVal == 0 then M.empty
-                else 
+            (Just xVal, Just yVal, Nothing)
+                | xVal == 0 || yVal == 0 -> M.empty
+                | otherwise ->
                     case signedVar of
                         Pos _ -> M.singleton z (yVal `div` xVal)
                         Neg _ -> M.singleton z (-yVal `div` xVal)
                         
-            (Just xVal, Nothing, Just zVal) -> 
-                -- x and z known; infer y
-                if zVal == 0 then M.empty
-                else 
+            (Just xVal, Nothing, Just zVal)
+                | zVal == 0 -> M.empty
+                | otherwise ->
                     case signedVar of
                         Pos _ -> M.singleton y (xVal * zVal)
                         Neg _ -> M.singleton y (-xVal * zVal)
                         
-            (Nothing, Just yVal, Just zVal) -> 
-                -- y and z known; infer x
-                if zVal == 0 then M.empty  -- division by zero
-                else
+            (Nothing, Just yVal, Just zVal)
+                | zVal == 0 -> M.empty  -- division by zero
+                | otherwise ->
                     case signedVar of
                         Pos _ -> M.singleton x (yVal `div` zVal)
                         Neg _ -> M.singleton x (- (yVal `div` zVal))
@@ -263,16 +260,15 @@ inferAssignment assignments tac = case tac of
 
 -- Given known assignments and a circuit, infer new assignments
 inferAllAssignments :: Circuit -> M.Map VariableId Integer -> M.Map VariableId Integer
-inferAllAssignments circuit assignments = go assignments assignments
+inferAllAssignments circuit assignments = go assignments (M.keysSet assignments)
   where
     circuitMap = constructMap circuit
 
-    go :: M.Map VariableId Integer -> M.Map VariableId Integer -> M.Map VariableId Integer
-    go oldAssignments newAssignments
-      | M.null newAssignments = oldAssignments
+    go :: M.Map VariableId Integer -> S.Set VariableId -> M.Map VariableId Integer
+    go oldAssignments newVars
+      | S.null newVars = oldAssignments
       | otherwise =
-          let newVars = M.keysSet newAssignments
-              clauseIndices = S.unions $ map (\v -> M.findWithDefault S.empty v circuitMap) (S.toList newVars)
+          let clauseIndices = S.unions $ map (\v -> M.findWithDefault S.empty v circuitMap) (S.toList newVars)
               clauses = [circuit !! i | i <- S.toList clauseIndices]
               inferredAssignments = M.unions $ map (inferAssignment oldAssignments) clauses
-          in go (M.union oldAssignments inferredAssignments) inferredAssignments
+          in go (M.union oldAssignments inferredAssignments) (M.keysSet inferredAssignments)
