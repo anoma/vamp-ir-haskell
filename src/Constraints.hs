@@ -1,6 +1,6 @@
 module Constraints
     ( ArithExp(..), Clause(..), Constraints,
-      Variable(..), VariableId, Sig, varid, newVar, FieldOp(..), 
+      Variable(..), VariableId, varid, newVar, FieldOp(..), evalArithExp, evalClause, 
     ) where
 
 import Control.Monad.State
@@ -19,24 +19,42 @@ data FieldOp
     | FSubtract
     deriving (Show, Eq)
 
-data ArithExp
+data ArithExp f
     = AVar Variable
-    | AFresh [ArithExp]
-    | AConst Integer
-    | ANeg ArithExp
-    | AOp FieldOp ArithExp ArithExp
+    | AFresh [ArithExp f]
+    | AConst f
+    | ANeg (ArithExp f)
+    | AOp FieldOp (ArithExp f) (ArithExp f)
 
-data Clause = ClEq ArithExp ArithExp
+data Clause f = ClEq (ArithExp f) (ArithExp f)
 
-type Constraints = [Clause]
+type Constraints f = [Clause f]
 
-type FlatM x = StateT ((S.Set Variable, M.Map VariableId Sig), VariableId) (Either String) x
+evalArithExp :: (Eq f, Fractional f) => M.Map VariableId f -> ArithExp f -> Maybe f
+evalArithExp env (AVar (Variable _ vId)) = M.lookup vId env
+evalArithExp _ (AConst n) = Just n
+evalArithExp env (ANeg exp) = negate <$> evalArithExp env exp
+evalArithExp env (AFresh exps) = case mapM (evalArithExp env) exps of
+                                    Just vals -> Just $ sum vals
+                                    Nothing -> Nothing
+evalArithExp env (AOp FAdd exp1 exp2) = (+) <$> evalArithExp env exp1 <*> evalArithExp env exp2
+evalArithExp env (AOp FSubtract exp1 exp2) = (-) <$> evalArithExp env exp1 <*> evalArithExp env exp2
+evalArithExp env (AOp FMultiply exp1 exp2) = (*) <$> evalArithExp env exp1 <*> evalArithExp env exp2
+evalArithExp env (AOp FDivide exp1 exp2) = do
+  numerator <- evalArithExp env exp1
+  denominator <- evalArithExp env exp2
+  if denominator == 0 then Nothing else Just (numerator / denominator)
+
+evalClause :: (Eq f, Fractional f) => M.Map VariableId f -> Clause f -> Maybe Bool
+evalClause env (ClEq exp1 exp2) = (==) <$> evalArithExp env exp1 <*> evalArithExp env exp2
+
+type FlatM x = StateT ((S.Set Variable, M.Map VariableId ()), VariableId) (Either String) x
 
 -- Produces a list of three address codes equivalent to the expression
 -- along with the variable that can be used as the head of the expression
 -- state acumulates free variables, fresh dependencies, and used names
 -- First arg is a possible variable that can be used to prevent new variables; handles clause equations
-flatten :: Maybe (Either Integer SignedVar) -> ArithExp -> FlatM (Either Integer SignedVar, Circuit)
+flatten :: (Eq f, Fractional f) => Maybe (Either f SignedVar) -> ArithExp f -> FlatM (Either f SignedVar, Circuit f)
 flatten hyv (AVar var) = do
     modify $ first $ first (S.insert var)
     let def x = return (Right $ Pos var, x)
@@ -125,7 +143,7 @@ flatten Nothing (AOp op e1 e2) = do
         (FMultiply, Right (Pos x), Right (Neg y)) -> def $ MulVVV (Neg newvar) x y
         (FMultiply, Right (Neg x), Right (Neg y)) -> def $ MulVVV (Pos newvar) x y
         -- Division
-        (FDivide, Left i1, Left i2) -> return (Left $ i1 `div` i2, body1 ++ body2)
+        (FDivide, Left i1, Left i2) -> return (Left $ i1 / i2, body1 ++ body2)
         (FDivide, Right (Pos x), Left i) ->
             if i == 0
             then lift $ Left "Division by zero encountered during 3ac generation"
@@ -183,37 +201,37 @@ flatten (Just (Left j)) (AOp op e1 e2) = do
                 if j /= 0
                 then lift $ Left "Nonzero compared to multiplication by zero during 3ac generation"
                 else def $ EVC x 0
-            else def $ EVC x (j `div` i)
+            else def $ EVC x (j / i)
         (FMultiply, Left i, Right (Pos x)) -> 
             if i == 0
             then 
                 if j /= 0
                 then lift $ Left "Nonzero compared to multiplication by zero during 3ac generation"
                 else def $ EVC x 0
-            else def $ EVC x (j `div` i)
+            else def $ EVC x (j / i)
         (FMultiply, Right (Neg x), Left i) -> 
             if i == 0
             then 
                 if j /= 0
                 then lift $ Left "Nonzero compared to multiplication by zero during 3ac generation"
                 else def $ EVC x 0
-            else def $ EVC x (-j `div` i)
+            else def $ EVC x (-j / i)
         (FMultiply, Left i, Right (Neg x)) -> 
             if i == 0
             then 
                 if j /= 0
                 then lift $ Left "Nonzero compared to multiplication by zero during 3ac generation"
                 else def $ EVC x 0
-            else def $ EVC x (-j `div` i)
+            else def $ EVC x (-j / i)
         (FMultiply, Right (Pos x), Right (Pos y)) -> def $ MulCVV j x y
         (FMultiply, Right (Neg x), Right (Pos y)) -> def $ MulCVV (-j) x y
         (FMultiply, Right (Pos x), Right (Neg y)) -> def $ MulCVV (-j) x y
         (FMultiply, Right (Neg x), Right (Neg y)) -> def $ MulCVV j x y
         -- Division
         (FDivide, Left i1, Left i2) -> 
-            if i1 `div` i2 /= j
+            if i1 / i2 /= j
             then lift $ Left "Different constants compared during 3ac generation (division)"
-            else return (Left $ i1 `div` i2, body1 ++ body2)
+            else return (Left $ i1 / i2, body1 ++ body2)
         (FDivide, Right (Pos x), Left i) ->
             if i == 0
             then lift $ Left "Division by zero encountered during 3ac generation"
@@ -265,7 +283,7 @@ flatten (Just (Right (Pos newvar))) (AOp op e1 e2) = do
         (FMultiply, Right (Pos x), Right (Neg y)) -> def $ MulVVV (Neg newvar) x y
         (FMultiply, Right (Neg x), Right (Neg y)) -> def $ MulVVV (Pos newvar) x y
         -- Division
-        (FDivide, Left i1, Left i2) -> return (Left $ i1 `div` i2, EVC newvar (i1 `div` i2):body1 ++ body2)
+        (FDivide, Left i1, Left i2) -> return (Left $ i1 / i2, EVC newvar (i1 / i2):body1 ++ body2)
         (FDivide, Right (Pos x), Left i) ->
             if i == 0
             then lift $ Left "Division by zero encountered during 3ac generation"
@@ -317,7 +335,7 @@ flatten (Just (Right (Neg newvar2))) (AOp op e1 e2) = do
         (FMultiply, Right (Pos x), Right (Neg y)) -> def $ MulVVV (Pos newvar2) x y
         (FMultiply, Right (Neg x), Right (Neg y)) -> def $ MulVVV (Neg newvar2) x y
         -- Division
-        (FDivide, Left i1, Left i2) -> return (Left $ i1 `div` i2, EVC newvar2 (-i1 `div` i2):body1 ++ body2)
+        (FDivide, Left i1, Left i2) -> return (Left $ i1 / i2, EVC newvar2 (-i1 / i2):body1 ++ body2)
         (FDivide, Right (Pos x), Left i) ->
             if i == 0
             then lift $ Left "Division by zero encountered during 3ac generation"
@@ -337,11 +355,11 @@ flatten (Just (Right (Neg newvar2))) (AOp op e1 e2) = do
 -- as the variable in the first expression can be shared with the second. This means that
 -- equations without operations on one side will be smaller if the non-op is on the left side.
 -- For example, x * (x - 1) = 0 will be bigger than 0 = x * (x - 1)
-flattenEq :: Clause -> FlatM Circuit
+flattenEq :: (Eq f, Fractional f) => Clause f -> FlatM (Circuit f)
 flattenEq (ClEq e1 e2) = do
     (hd1, bdy1) <- flatten Nothing e1
     (_, bdy2) <- flatten (Just hd1) e2
     return $ bdy1 ++ bdy2
 
-flattenConstraints :: Constraints -> FlatM Circuit
+flattenConstraints :: (Eq f, Fractional f) => Constraints f -> FlatM (Circuit f)
 flattenConstraints = foldr ((<*>) . ((++) <$>) . flattenEq) (return [])

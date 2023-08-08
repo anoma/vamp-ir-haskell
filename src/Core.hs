@@ -20,22 +20,22 @@ data ArithOp
     | AModulo
     deriving (Show, Eq)
 
-data CoreP v
+data CoreP f v
     = CVar Variable (Maybe v)
-    | CEq (CoreP v) (CoreP v)
-    | CAnd (CoreP v) (CoreP v)
+    | CEq (CoreP f v) (CoreP f v)
+    | CAnd (CoreP f v) (CoreP f v)
     | CUnit
-    | CPair (CoreP v) (CoreP v) | CFst (CoreP v) | CSnd (CoreP v)
-    | CCons (CoreP v) (CoreP v) | CNil | CHd (CoreP v) | CTl (CoreP v)
-    | CFresh [CoreP v]
-    | CLam (Maybe VariableId) (Maybe Int) (v -> CoreP v)
-    | CApp (CoreP v) (CoreP v)
-    | COp ArithOp (CoreP v) (CoreP v)
-    | CConst Integer
-    | CNeg (CoreP v)
+    | CPair (CoreP f v) (CoreP f v) | CFst (CoreP f v) | CSnd (CoreP f v)
+    | CCons (CoreP f v) (CoreP f v) | CNil | CHd (CoreP f v) | CTl (CoreP f v)
+    | CFresh [CoreP f v]
+    | CLam (Maybe VariableId) (Maybe Int) (v -> CoreP f v)
+    | CApp (CoreP f v) (CoreP f v)
+    | COp ArithOp (CoreP f v) (CoreP f v)
+    | CConst f
+    | CNeg (CoreP f v)
     | CIntrinsic String
 
-newtype Core = Core { unCore :: forall a . CoreP a }
+newtype Core f = Core { unCore :: forall a . CoreP f a }
 
 data CallNumTree
     = CaLeaf
@@ -43,9 +43,9 @@ data CallNumTree
     | CaLam Int CallNumTree
 
 -- Number of times a variable id appears under its binder
-callNumbers :: Core -> CallNumTree
+callNumbers :: Core f -> CallNumTree
 callNumbers = snd . go . unCore where
-    go :: CoreP () -> (M.Map VariableId Int, CallNumTree)
+    go :: CoreP f () -> (M.Map VariableId Int, CallNumTree)
     go expr = case expr of
         (CVar var _) -> (M.fromList [(varid var, 1)], CaLeaf)
         (CEq e1 e2) -> 
@@ -101,9 +101,8 @@ callNumbers = snd . go . unCore where
         (CConst _) -> (M.empty, CaLeaf)
 
 -- Is there a more direct way to do this?
-callDecorate :: Core -> Core
+callDecorate :: Fractional f => Core f -> Core f
 callDecorate exp = Core $ go (unCore exp) (callNumbers exp) where
-    go :: CoreP v -> CallNumTree -> CoreP v
     go expr ctn = case (expr, ctn) of
         (b, CaLeaf) -> b
         (CFst e1, c) -> CFst $ go e1 c
@@ -122,10 +121,10 @@ callDecorate exp = Core $ go (unCore exp) (callNumbers exp) where
         (CLam i _ f, CaLam n c) -> CLam i (Just n) (\v -> go (f v) c)
         _ -> CConst 0 -- Default that should never occur
 
-newtype Normalized = Normalized {unNormalized :: CoreP Normalized}
+newtype Normalized f = Normalized {unNormalized :: CoreP f (Normalized f)}
 
 data RoughType = RConstraint | RElement | RArithExp | RFresh | ROther deriving (Eq)
-roughType :: CoreP v -> RoughType
+roughType :: CoreP f v -> RoughType
 roughType expr = case expr of
     CVar _ _-> RElement
     CEq _ _ -> RConstraint
@@ -148,9 +147,9 @@ roughType expr = case expr of
 
 -- State contains the next free variable name
 -- And a mapping from variables to normalzied terms
-type EvalM x = StateT (VariableId, M.Map VariableId (CoreP Normalized)) (Either String) x
+type EvalM f x = StateT (VariableId, M.Map VariableId (CoreP f (Normalized f))) (Either String) x
 
-normalize :: CoreP Normalized -> [CoreP Normalized] -> EvalM (CoreP Normalized)
+normalize :: (Ord f, Num f) => CoreP f (Normalized f) -> [CoreP f (Normalized f)] -> EvalM f (CoreP f (Normalized f))
 normalize expr l = case expr of
     CVar var Nothing -> case l of
         [] -> return $ CVar var Nothing
@@ -244,7 +243,7 @@ toFieldOp AMultiply = Right FMultiply
 toFieldOp ADivide = Right FDivide
 toFieldOp _ = Left "Not a field operation"
 
-evala :: CoreP Normalized -> Either String ArithExp
+evala :: CoreP f (Normalized f) -> Either String (ArithExp f)
 evala expr = case expr of
     CVar var Nothing -> return $ AVar var
     CVar _ (Just _) -> Left "Impossible wrapped variable"
@@ -266,7 +265,7 @@ evala expr = case expr of
     CConst i -> return $ AConst i
     CIntrinsic _ -> Left "Impossible intrinsic"
 
-evalc :: CoreP Normalized -> Either String Constraints
+evalc :: CoreP f (Normalized f) -> Either String (Constraints f)
 evalc expr = case expr of
     CVar _ _ -> Left "Variables cannot stand for constraints"
     CEq (CPair a1 b1) (CPair a2 b2) -> liftA2 (++) (evalc (CEq a1 b1)) (evalc (CEq a2 b2))
@@ -299,7 +298,7 @@ evalc expr = case expr of
     CConst _ -> Left "Constants cannot represent constraints"
     CIntrinsic _ -> Left "Impossible intrinsic"
 
-run :: VariableId -> Core -> Either String (Constraints, VariableId)
+run :: (Ord f, Fractional f) => VariableId -> Core f -> Either String (Constraints f, VariableId)
 run i c = do
     (norm, (mid, mdefs)) <- runStateT (normalize (unCore (callDecorate c)) []) (i, M.empty)
     norm' <- evalc norm
@@ -307,5 +306,5 @@ run i c = do
     mcons <- forM mdefs' evalc
     return (concat $ norm':mcons, mid)
 
-eval :: VariableId -> Core -> Either String Constraints
+eval :: (Ord f, Fractional f) => VariableId -> Core f -> Either String (Constraints f)
 eval i c = evalStateT (normalize (unCore (callDecorate c)) []) (i, M.empty) >>= evalc

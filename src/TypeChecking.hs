@@ -70,13 +70,13 @@ substU m (UVar v) = fromMaybe (UVar v) (M.lookup (Right v) m)
 substU m (UTerm (TypeVarF v)) = fromMaybe (UTerm $ TypeVarF v) (M.lookup (Left v) m)
 substU m (UTerm t) = UTerm (fmap (substU m) t)
 
-check :: CoreP UType -> UType -> Infer ()
+check :: CoreP f UType -> UType -> Infer ()
 check e ty = do
   ty' <- infer e
   _ <- lift $ ty =:= ty'
   return ()
 
-infer :: CoreP UType -> Infer UType
+infer :: CoreP f UType -> Infer UType
 infer expr = case expr of
     CVar var Nothing -> lookup $ varid var
     CVar _ (Just ty) -> return ty
@@ -192,8 +192,8 @@ runInfer = runIdentity . evalIntBindingT . runExceptT . flip runReaderT M.empty
 genpoly :: Infer UType -> Infer Polytype
 genpoly = fmap (fmap (fromJust . freeze)) . generalize <=< (>>= (lift . applyBindings))
 
-inferPolytype :: Core -> Either String Polytype
+inferPolytype :: Core f -> Either String Polytype
 inferPolytype = runInfer . genpoly . infer . unCore
 
-checkType :: Core -> Type -> Either String ()
+checkType :: Core f -> Type -> Either String ()
 checkType expr = runInfer . check (unCore expr) . unfreeze
