@@ -1,6 +1,6 @@
 module Constraints
     ( ArithExp(..), Clause(..), Constraints,
-      Variable(..), VariableId, varid, newVar, FieldOp(..), evalArithExp, evalClause, 
+      Variable(..), VariableId, varid, newVar, FieldOp(..), evalArithExp, evalClause, flatten, collectVars
     ) where
 
 import Control.Monad.State
@@ -30,10 +30,18 @@ data Clause f = ClEq (ArithExp f) (ArithExp f)
 
 type Constraints f = [Clause f]
 
+collectVars :: ArithExp f -> [Variable]
+collectVars e = case e of
+  AVar var -> [var]
+  AFresh exps -> concatMap collectVars exps
+  ANeg exp0 -> collectVars exp0
+  AOp _ lhs rhs -> collectVars lhs ++ collectVars rhs
+  _ -> []
+
 evalArithExp :: (Eq f, Fractional f) => M.Map VariableId f -> ArithExp f -> Maybe f
 evalArithExp env (AVar (Variable _ vId)) = M.lookup vId env
 evalArithExp _ (AConst n) = Just n
-evalArithExp env (ANeg exp) = negate <$> evalArithExp env exp
+evalArithExp env (ANeg exp0) = negate <$> evalArithExp env exp0
 evalArithExp env (AFresh exps) = case mapM (evalArithExp env) exps of
                                     Just vals -> Just $ sum vals
                                     Nothing -> Nothing
@@ -116,8 +124,8 @@ flatten Nothing (AOp op e1 e2) = do
         (FAdd, Left i1, Left i2) -> return (Left $ i1 + i2, body1 ++ body2)
         (FAdd, Right (Pos x), Left i) -> def $ AddVCV newvar i x
         (FAdd, Left i, Right (Pos x)) -> def $ AddVCV newvar i x
-        (FAdd, Right (Neg x), Left i) -> def $ AddVCV newvar (-i) x
-        (FAdd, Left i, Right (Neg x)) -> def $ AddVCV newvar (-i) x
+        (FAdd, Right (Neg x), Left i) -> def $ AddCVV i newvar x
+        (FAdd, Left i, Right (Neg x)) -> def $ AddCVV i newvar x
         (FAdd, Right (Pos x), Right (Pos y)) -> def $ AddVVV (Pos newvar) x y
         (FAdd, Right (Neg x), Right (Pos y)) -> def $ AddVVV (Pos y) newvar x
         (FAdd, Right (Pos x), Right (Neg y)) -> def $ AddVVV (Pos x) newvar y
@@ -253,17 +261,17 @@ flatten (Just (Right (Pos newvar))) (AOp op e1 e2) = do
     let def a = do return (Right $ Pos newvar, a:body1 ++ body2)
     case (op, head1, head2) of
         -- Addition
-        (FAdd, Left i1, Left i2) -> return (Left $ i1 + i2, EVC newvar (i1 + i2):body1 ++ body2)
+        (FAdd, Left i1, Left i2) -> return (Right (Pos newvar), EVC newvar (i1 + i2):body1 ++ body2)
         (FAdd, Right (Pos x), Left i) -> def $ AddVCV newvar i x
         (FAdd, Left i, Right (Pos x)) -> def $ AddVCV newvar i x
-        (FAdd, Right (Neg x), Left i) -> def $ AddVCV newvar (-i) x
-        (FAdd, Left i, Right (Neg x)) -> def $ AddVCV newvar (-i) x
+        (FAdd, Right (Neg x), Left i) -> def $ AddCVV i newvar x
+        (FAdd, Left i, Right (Neg x)) -> def $ AddCVV i newvar x
         (FAdd, Right (Pos x), Right (Pos y)) -> def $ AddVVV (Pos newvar) x y
         (FAdd, Right (Neg x), Right (Pos y)) -> def $ AddVVV (Pos y) newvar x
         (FAdd, Right (Pos x), Right (Neg y)) -> def $ AddVVV (Pos x) newvar y
         (FAdd, Right (Neg x), Right (Neg y)) -> def $ AddVVV (Neg newvar) x y
         -- Subtraction
-        (FSubtract, Left i1, Left i2) -> return (Left $ i1 - i2, EVC newvar (i1 - i2):body1 ++ body2)
+        (FSubtract, Left i1, Left i2) -> return (Right (Pos newvar), EVC newvar (i1 - i2):body1 ++ body2)
         (FSubtract, Right (Pos x), Left i) -> def $ AddVCV newvar (-i) x
         (FSubtract, Left i, Right (Pos x)) -> def $ AddCVV i newvar x
         (FSubtract, Right (Neg x), Left i) -> def $ AddCVV (-i) newvar x
@@ -273,7 +281,7 @@ flatten (Just (Right (Pos newvar))) (AOp op e1 e2) = do
         (FSubtract, Right (Pos x), Right (Neg y)) -> def $ AddVVV (Pos newvar) x y
         (FSubtract, Right (Neg x), Right (Neg y)) -> def $ AddVVV (Pos y) newvar x
         -- Multiplication
-        (FMultiply, Left i1, Left i2) -> return (Left $ i1 * i2, EVC newvar (i1 * i2):body1 ++ body2)
+        (FMultiply, Left i1, Left i2) -> return (Right (Pos newvar), EVC newvar (i1 * i2):body1 ++ body2)
         (FMultiply, Right (Pos x), Left i) -> def $ MulVCV newvar i x
         (FMultiply, Left i, Right (Pos x)) -> def $ MulVCV newvar i x
         (FMultiply, Right (Neg x), Left i) -> def $ MulVCV newvar (-i) x
@@ -283,7 +291,7 @@ flatten (Just (Right (Pos newvar))) (AOp op e1 e2) = do
         (FMultiply, Right (Pos x), Right (Neg y)) -> def $ MulVVV (Neg newvar) x y
         (FMultiply, Right (Neg x), Right (Neg y)) -> def $ MulVVV (Pos newvar) x y
         -- Division
-        (FDivide, Left i1, Left i2) -> return (Left $ i1 / i2, EVC newvar (i1 / i2):body1 ++ body2)
+        (FDivide, Left i1, Left i2) -> return (Right (Pos newvar), EVC newvar (i1 / i2):body1 ++ body2)
         (FDivide, Right (Pos x), Left i) ->
             if i == 0
             then lift $ Left "Division by zero encountered during 3ac generation"
@@ -305,17 +313,17 @@ flatten (Just (Right (Neg newvar2))) (AOp op e1 e2) = do
     let def a = do return (Right $ Pos newvar2, a:body1 ++ body2)
     case (op, head1, head2) of
         -- Addition
-        (FAdd, Left i1, Left i2) -> return (Left $ i1 + i2, EVC newvar2 (-i1 - i2):body1 ++ body2)
+        (FAdd, Left i1, Left i2) -> return (Right (Pos newvar2), EVC newvar2 (-i1 - i2):body1 ++ body2)
         (FAdd, Right (Pos x), Left i) -> def $ AddCVV (-i) newvar2 x
         (FAdd, Left i, Right (Pos x)) -> def $ AddCVV (-i) newvar2 x
-        (FAdd, Right (Neg x), Left i) -> def $ AddCVV i newvar2 x
-        (FAdd, Left i, Right (Neg x)) -> def $ AddCVV i newvar2 x
+        (FAdd, Right (Neg x), Left i) -> def $ AddVCV x i newvar2
+        (FAdd, Left i, Right (Neg x)) -> def $ AddVCV x i newvar2
         (FAdd, Right (Pos x), Right (Pos y)) -> def $ AddVVV (Neg newvar2) x y
         (FAdd, Right (Neg x), Right (Pos y)) -> def $ AddVVV (Pos x) newvar2 y
         (FAdd, Right (Pos x), Right (Neg y)) -> def $ AddVVV (Pos y) newvar2 x
         (FAdd, Right (Neg x), Right (Neg y)) -> def $ AddVVV (Pos newvar2) x y
         -- Subtraction
-        (FSubtract, Left i1, Left i2) -> return (Left $ i1 - i2, EVC newvar2 (-i1 + i2):body1 ++ body2)
+        (FSubtract, Left i1, Left i2) -> return (Right (Pos newvar2), EVC newvar2 (-i1 + i2):body1 ++ body2)
         (FSubtract, Right (Pos x), Left i) -> def $ AddCVV i newvar2 x
         (FSubtract, Left i, Right (Pos x)) -> def $ AddVCV x i newvar2
         (FSubtract, Right (Neg x), Left i) -> def $ AddVCV x (-i) newvar2
@@ -325,7 +333,7 @@ flatten (Just (Right (Neg newvar2))) (AOp op e1 e2) = do
         (FSubtract, Right (Pos x), Right (Neg y)) -> def $ AddVVV (Neg newvar2) x y
         (FSubtract, Right (Neg x), Right (Neg y)) -> def $ AddVVV (Pos x) newvar2 y
         -- Multiplication
-        (FMultiply, Left i1, Left i2) -> return (Left $ i1 * i2, EVC newvar2 (-i1 * i2):body1 ++ body2)
+        (FMultiply, Left i1, Left i2) -> return (Right (Pos newvar2), EVC newvar2 (-i1 * i2):body1 ++ body2)
         (FMultiply, Right (Pos x), Left i) -> def $ MulVCV newvar2 (-i) x
         (FMultiply, Left i, Right (Pos x)) -> def $ MulVCV newvar2 (-i) x
         (FMultiply, Right (Neg x), Left i) -> def $ MulVCV newvar2 i x
@@ -335,7 +343,7 @@ flatten (Just (Right (Neg newvar2))) (AOp op e1 e2) = do
         (FMultiply, Right (Pos x), Right (Neg y)) -> def $ MulVVV (Pos newvar2) x y
         (FMultiply, Right (Neg x), Right (Neg y)) -> def $ MulVVV (Neg newvar2) x y
         -- Division
-        (FDivide, Left i1, Left i2) -> return (Left $ i1 / i2, EVC newvar2 (-i1 / i2):body1 ++ body2)
+        (FDivide, Left i1, Left i2) -> return (Right (Pos newvar2), EVC newvar2 (-i1 / i2):body1 ++ body2)
         (FDivide, Right (Pos x), Left i) ->
             if i == 0
             then lift $ Left "Division by zero encountered during 3ac generation"
